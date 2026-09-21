@@ -142,9 +142,9 @@ function buildSearchCenters(bounds) {
   const latSpan = Math.abs(ne.lat() - sw.lat());
   const lngSpan = Math.abs(ne.lng() - sw.lng());
 
-  // Nearby Search has a maximum radius of 50 km. We split the viewport
-  // into small cells so a wide map does not silently search only its center.
-  const maxCellDegrees = 0.62;
+  // Nearby Search returns at most 20 places per request, so we split the
+  // viewport into small cells. Smaller cells = more stations found overall.
+  const maxCellDegrees = 0.35;
   const rows = Math.max(1, Math.min(4, Math.ceil(latSpan / maxCellDegrees)));
   const cols = Math.max(1, Math.min(4, Math.ceil(lngSpan / maxCellDegrees)));
 
@@ -156,7 +156,15 @@ function buildSearchCenters(bounds) {
       centers.push({ lat, lng });
     }
   }
-  return { centers, rows, cols };
+
+  // รัศมีของแต่ละเซลล์ (ครึ่งเส้นทแยงมุม) เพื่อให้ผลลัพธ์อยู่ในเซลล์นั้นจริง ๆ
+  // ไม่ใช่ 20 ปั๊มที่ใกล้จุดกลางที่สุดในรัศมี 50 กม.
+  const midLat = (sw.lat() + ne.lat()) / 2;
+  const halfLatM = (latSpan / rows / 2) * 111320;
+  const halfLngM = (lngSpan / cols / 2) * 111320 * Math.cos(midLat * Math.PI / 180);
+  const radius = Math.min(50000, Math.max(1000, Math.round(Math.hypot(halfLatM, halfLngM))));
+
+  return { centers, rows, cols, radius };
 }
 
 async function searchArea(force = false) {
@@ -181,10 +189,10 @@ async function searchArea(force = false) {
   $("refresh").disabled = true;
 
   try {
-    // ค้นหาปั๊มทุกชนิดรอบจุดต่าง ๆ + ค้นหาด้วยข้อความ "LPG" ทั้งพื้นที่ที่เห็น
-    // เพื่อไม่ให้ปั๊ม LPG หลุดไปเพราะติด 20 อันดับแรกของปั๊มน้ำมันทั่วไป
+    // ค้นหาปั๊มทุกชนิดรอบจุดต่าง ๆ + ค้นหาด้วยข้อความ "LPG / ปั๊มแก๊ส" ทั้งพื้นที่ที่เห็น
+    // (ผลจากการค้นหาแบบ Nearby มาก่อน เพื่อให้ dedupe เก็บตัวที่มีข้อมูลเชื้อเพลิงไว้)
     const tasks = [
-      ...plan.centers.map((center) => searchCell(center)),
+      ...plan.centers.map((center) => searchCell(center, plan.radius)),
       searchViewportText(bounds)
     ];
     const results = await Promise.allSettled(tasks);
@@ -201,15 +209,18 @@ async function searchArea(force = false) {
       }
     }
 
-    const unique = dedupePlaces(all).filter(isActualLpg);
+    const unique = dedupePlaces(all).filter(isShownPlace);
     const visible = unique.filter((p) => isInsideViewport(p, bounds));
     draw(visible);
+
+    const lpgCount = visible.filter(isActualLpg).length;
+    const fuelCount = visible.length - lpgCount;
 
     if (failures === results.length) {
       $("count").textContent = "ค้นหาไม่สำเร็จ";
       status("Google Places ไม่ตอบข้อมูล กรุณาตรวจ API Key หรือโควตา (ดู error ใน Console)", 5000);
     } else {
-      $("count").textContent = `LPG ในพื้นที่นี้ ${visible.length} แห่ง`;
+      $("count").textContent = `🔴 LPG ${lpgCount} · 🔵 ปั๊มน้ำมัน ${fuelCount}`;
       if (failures) status(`ค้นหาได้บางส่วน (${failures} จุดค้นหามีปัญหา)`, 3500);
     }
   } catch (error) {
@@ -221,12 +232,12 @@ async function searchArea(force = false) {
   }
 }
 
-async function searchCell(center) {
+async function searchCell(center, radius) {
   const { places } = await Place.searchNearby({
     fields: PLACE_FIELDS,
     locationRestriction: {
       center,
-      radius: 50000
+      radius
     },
     includedPrimaryTypes: ["gas_station"],
     maxResultCount: 20,
@@ -239,10 +250,9 @@ async function searchCell(center) {
 
 async function searchViewportText(bounds) {
   const { places } = await Place.searchByText({
-    textQuery: "LPG ปั๊มแก๊ส",
+    textQuery: "ปั๊มแก๊ส LPG",
     fields: PLACE_FIELDS,
     locationRestriction: bounds,
-    includedType: "gas_station",
     maxResultCount: 20,
     language: "th",
     region: "TH"
@@ -267,23 +277,37 @@ function hasLpgFuelData(place) {
   return getFuelPrices(place).some((fuel) => String(fuel.type || "").toUpperCase() === "LPG");
 }
 
+function normalizeThai(text) {
+  // ตัดไม้ไต่คู้และวรรณยุกต์ออก เพื่อให้จับได้ทุกแบบที่คนสะกด เช่น แก๊ส แก็ส แก๊ซ ก๊าซ
+  return String(text || "").toLowerCase().replace(/[\u0E47-\u0E4B]/g, "");
+}
+
 function hasStrongLpgName(place) {
-  const name = String(place.displayName?.text || place.displayName || "").toLowerCase();
-  const address = String(place.formattedAddress || "").toLowerCase();
+  const name = normalizeThai(place.displayName?.text || place.displayName);
+  const address = normalizeThai(place.formattedAddress);
 
   // เจอคำว่า LPG / แอลพีจี ที่ชื่อหรือที่อยู่
   if (/lpg|แอลพีจี/.test(name + " " + address)) return true;
 
-  // ชื่อเป็น "ปั๊มแก๊ส / ก๊าซ" แต่ไม่ใช่ NGV/CNG
-  if (/แก๊ส|ก๊าซ/.test(name) && !/ngv|cng|เอ็นจีวี/.test(name)) return true;
+  // ชื่อมีคำว่า แก๊ส / แก็ส / แก๊ซ / ก๊าซ แต่ไม่ใช่ NGV/CNG
+  if (/แก[สซ]|กาซ/.test(name) && !/ngv|cng|เอ็นจีวี/.test(name)) return true;
 
   return false;
 }
 
 function isActualLpg(place) {
   // Prefer Google's structured fuel data. If Google has not supplied it,
-  // accept only a strong LPG name signal rather than every generic gas station.
+  // accept a strong LPG/แก๊ส name signal.
   return hasLpgFuelData(place) || hasStrongLpgName(place);
+}
+
+function isGasStation(place) {
+  return place.primaryType === "gas_station" || (place.types || []).includes("gas_station");
+}
+
+function isShownPlace(place) {
+  // แสดงทั้งปั๊ม LPG (หมุดแดง) และปั๊มน้ำมันทั่วไป (หมุดฟ้า)
+  return isActualLpg(place) || isGasStation(place);
 }
 
 function isInsideViewport(place, bounds) {
@@ -301,16 +325,19 @@ function draw(places) {
   for (const place of places) {
     if (!place.location) continue;
 
+    const isLpg = isActualLpg(place);
+
     const el = document.createElement("div");
-    el.className = "lpg-pin";
-    el.textContent = "LPG";
+    el.className = "pin " + (isLpg ? "pin-lpg" : "pin-fuel");
+    el.textContent = isLpg ? "LPG" : "⛽";
 
     const marker = new AdvancedMarkerElement({
       map,
       position: place.location,
       content: el,
-      title: place.displayName?.text || place.displayName || "สถานี LPG",
-      gmpClickable: true
+      title: place.displayName?.text || place.displayName || (isLpg ? "สถานี LPG" : "ปั๊มน้ำมัน"),
+      gmpClickable: true,
+      zIndex: isLpg ? 2 : 1 // หมุด LPG อยู่บนสุดเมื่อซ้อนกัน
     });
 
     marker.addListener("click", () => openStation(place));
@@ -338,22 +365,30 @@ function formatUpdateTime(iso) {
 }
 
 function openStation(place) {
-  const name = esc(place.displayName?.text || place.displayName || "สถานี LPG");
+  const isLpg = isActualLpg(place);
+  const name = esc(place.displayName?.text || place.displayName || (isLpg ? "สถานี LPG" : "ปั๊มน้ำมัน"));
   const address = esc(place.formattedAddress || "ไม่มีข้อมูลที่อยู่");
   const mapsUrl = place.googleMapsURI || `https://www.google.com/maps/search/?api=1&query=${place.location.lat()},${place.location.lng()}`;
 
-  const lpg = getFuelPrices(place).find((fuel) => String(fuel.type || "").toUpperCase() === "LPG");
-  let priceHtml = `<div class="meta"><b>ราคา LPG:</b> ไม่มีข้อมูลราคา</div>`;
-  if (lpg?.price) {
-    const price = formatPrice(lpg);
-    const updated = formatUpdateTime(lpg.updateTime);
-    priceHtml = `<div class="meta"><b>ราคา LPG:</b> ${esc(price || "มีข้อมูลราคา")}</div>` +
-      (updated ? `<div class="updated">อัปเดต/ตรวจพบ: ${esc(updated)}</div>` : "");
-  }
+  let priceHtml = "";
+  let verification;
 
-  const verification = hasLpgFuelData(place)
-    ? "Google Places มีข้อมูลเชื้อเพลิง LPG ของสถานีนี้"
-    : "ชื่อสถานีระบุ LPG แต่ Google ยังไม่มีข้อมูลเชื้อเพลิงแบบโครงสร้าง";
+  if (isLpg) {
+    const lpg = getFuelPrices(place).find((fuel) => String(fuel.type || "").toUpperCase() === "LPG");
+    priceHtml = `<div class="meta"><b>ราคา LPG:</b> ไม่มีข้อมูลราคา</div>`;
+    if (lpg?.price) {
+      const price = formatPrice(lpg);
+      const updated = formatUpdateTime(lpg.updateTime);
+      priceHtml = `<div class="meta"><b>ราคา LPG:</b> ${esc(price || "มีข้อมูลราคา")}</div>` +
+        (updated ? `<div class="updated">อัปเดต/ตรวจพบ: ${esc(updated)}</div>` : "");
+    }
+
+    verification = hasLpgFuelData(place)
+      ? "Google Places มีข้อมูลเชื้อเพลิง LPG ของสถานีนี้"
+      : "ชื่อสถานีระบุ LPG/แก๊ส แต่ Google ยังไม่มีข้อมูลเชื้อเพลิงแบบโครงสร้าง";
+  } else {
+    verification = "ปั๊มน้ำมันทั่วไป (ไม่พบข้อมูลว่ามี LPG)";
+  }
 
   $("panelContent").innerHTML = `
     <div class="title">${name}</div>

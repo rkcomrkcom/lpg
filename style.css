@@ -39,7 +39,9 @@ button,input{font:inherit}
 .key-card small{display:block;color:#777;margin-top:10px;line-height:1.4}
 .key-error{margin-top:12px;background:#fff4f4;border:1px solid #f0b8b8;color:#a11;padding:10px;border-radius:10px;font-size:13px;line-height:1.4}
 .reset-key{background:#f1f3f4!important;color:#3c4043!important;font-size:13px;padding:9px!important}
-.lpg-pin{background:#fff;border:2px solid #1769e0;border-radius:18px;padding:5px 8px;min-width:44px;text-align:center;color:#174ea6;font-size:12px;font-weight:700;box-shadow:0 2px 7px #0004;user-select:none}
+.pin{border:2px solid #fff;border-radius:18px;padding:5px 8px;min-width:44px;text-align:center;color:#fff;font-size:12px;font-weight:700;box-shadow:0 2px 7px #0005;user-select:none}
+.pin-lpg{background:#d93025}
+.pin-fuel{background:#1769e0;min-width:34px}
 @media(min-width:700px){
   .topbar{left:18px;right:auto;width:430px}
   .bottom{left:18px;right:auto;width:430px}
