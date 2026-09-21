@@ -4,7 +4,6 @@ let map = null;
 let Place = null;
 let AdvancedMarkerElement = null;
 let markers = [];
-let mapTimer = null;   // ตัวจับเวลาสำหรับค้นหาตามแมพ
 let textTimer = null;  // ตัวจับเวลาสำหรับช่องค้นหาข้อความ
 let searchSeq = 0;
 let lastSearchSignature = "";
@@ -112,10 +111,7 @@ async function init() {
     gestureHandling: "greedy"
   });
 
-  map.addListener("idle", () => {
-    clearTimeout(mapTimer);
-    mapTimer = setTimeout(searchArea, 500);
-  });
+  // ไม่ค้นหาอัตโนมัติเมื่อขยับแมพ เพื่อประหยัดโควตา ค้นหาเฉพาะตอนกดปุ่ม "ค้นหาพื้นที่นี้"
 
   $("refresh").onclick = () => searchArea(true);
   $("locate").onclick = locate;
@@ -124,8 +120,7 @@ async function init() {
 
   setupSearch();
 
-  await new Promise((resolve) => google.maps.event.addListenerOnce(map, "idle", resolve));
-  await searchArea(true);
+  $("count").textContent = "กดปุ่ม “ค้นหาพื้นที่นี้” เพื่อดูปั๊มในแมพ";
 }
 
 function viewportSignature() {
@@ -142,11 +137,11 @@ function buildSearchCenters(bounds) {
   const latSpan = Math.abs(ne.lat() - sw.lat());
   const lngSpan = Math.abs(ne.lng() - sw.lng());
 
-  // Nearby Search returns at most 20 places per request, so we split the
-  // viewport into small cells. Smaller cells = more stations found overall.
+  // Nearby Search returns at most 20 places per request. เพื่อประหยัดโควตา
+  // จำกัดเซลล์สูงสุด 2x2 = 4 คำขอ (บวกค้นหาด้วยข้อความอีก 1 = สูงสุด 5 คำขอต่อการกด)
   const maxCellDegrees = 0.35;
-  const rows = Math.max(1, Math.min(4, Math.ceil(latSpan / maxCellDegrees)));
-  const cols = Math.max(1, Math.min(4, Math.ceil(lngSpan / maxCellDegrees)));
+  const rows = Math.max(1, Math.min(2, Math.ceil(latSpan / maxCellDegrees)));
+  const cols = Math.max(1, Math.min(2, Math.ceil(lngSpan / maxCellDegrees)));
 
   const centers = [];
   for (let r = 0; r < rows; r++) {
