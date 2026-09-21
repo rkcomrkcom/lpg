@@ -200,11 +200,13 @@ async function searchArea(force = false) {
 
     const all = [];
     let failures = 0;
+    let firstError = null;
     for (const result of results) {
       if (result.status === "fulfilled") {
         all.push(...result.value);
       } else {
         failures++;
+        firstError = firstError || result.reason;
         console.error("Places search failed:", result.reason);
       }
     }
@@ -218,7 +220,8 @@ async function searchArea(force = false) {
 
     if (failures === results.length) {
       $("count").textContent = "ค้นหาไม่สำเร็จ";
-      status("Google Places ไม่ตอบข้อมูล กรุณาตรวจ API Key หรือโควตา (ดู error ใน Console)", 5000);
+      const detail = String(firstError?.message || firstError || "").slice(0, 220);
+      status("Google Places ไม่ตอบข้อมูล: " + (detail || "ไม่ทราบสาเหตุ (ดู error ใน Console)"), 12000);
     } else {
       $("count").textContent = `🔴 LPG ${lpgCount} · 🔵 ปั๊มน้ำมัน ${fuelCount}`;
       if (failures) status(`ค้นหาได้บางส่วน (${failures} จุดค้นหามีปัญหา)`, 3500);
