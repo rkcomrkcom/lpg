@@ -44,6 +44,3 @@ button,input{font:inherit}
   .bottom{left:18px;right:auto;width:430px}
   .panel{left:18px;right:auto;width:430px}
 }
-[hidden] {
-  display: none !important;
-}
