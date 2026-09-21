@@ -282,6 +282,20 @@ function normalizeThai(text) {
   return String(text || "").toLowerCase().replace(/[\u0E47-\u0E4B]/g, "");
 }
 
+// ชื่อที่ถือว่าเป็นปั๊มน้ำมันทั่วไป (เพิ่มแบรนด์อื่นได้ที่นี่)
+// ใช้ขอบเขตคำกับตัวอักษรอังกฤษ เพื่อไม่ให้ "pt" ไปติดในคำอื่น เช่น "optical"
+const FUEL_BRAND_PATTERNS = [
+  /ปตท/,
+  /พีที/,
+  /(^|[^a-z])ptt([^a-z]|$)/,
+  /(^|[^a-z])pt([^a-z]|$)/
+];
+
+function hasFuelBrandName(place) {
+  const name = normalizeThai(place.displayName?.text || place.displayName);
+  return FUEL_BRAND_PATTERNS.some((pattern) => pattern.test(name));
+}
+
 function hasStrongLpgName(place) {
   const name = normalizeThai(place.displayName?.text || place.displayName);
   const address = normalizeThai(place.formattedAddress);
@@ -296,13 +310,18 @@ function hasStrongLpgName(place) {
 }
 
 function isActualLpg(place) {
-  // Prefer Google's structured fuel data. If Google has not supplied it,
-  // accept a strong LPG/แก๊ส name signal.
-  return hasLpgFuelData(place) || hasStrongLpgName(place);
+  // 1) ชื่อระบุ LPG / แก๊ส ชัดเจน -> ปั๊ม LPG (แดง)
+  if (hasStrongLpgName(place)) return true;
+  // 2) ชื่อเป็นแบรนด์ปั๊มน้ำมัน เช่น ปตท / PTT / PT -> ปั๊มน้ำมัน (ฟ้า)
+  if (hasFuelBrandName(place)) return false;
+  // 3) นอกนั้นดูจากข้อมูลเชื้อเพลิงของ Google
+  return hasLpgFuelData(place);
 }
 
 function isGasStation(place) {
-  return place.primaryType === "gas_station" || (place.types || []).includes("gas_station");
+  return place.primaryType === "gas_station" ||
+    (place.types || []).includes("gas_station") ||
+    hasFuelBrandName(place);
 }
 
 function isShownPlace(place) {
@@ -364,31 +383,36 @@ function formatUpdateTime(iso) {
   }).format(d);
 }
 
+function lpgPriceHtml(place, showWhenMissing) {
+  const lpg = getFuelPrices(place).find((fuel) => String(fuel.type || "").toUpperCase() === "LPG");
+  if (!lpg?.price) {
+    return showWhenMissing ? `<div class="meta"><b>ราคา LPG:</b> ไม่มีข้อมูลราคา</div>` : "";
+  }
+  const price = formatPrice(lpg);
+  const updated = formatUpdateTime(lpg.updateTime);
+  return `<div class="meta"><b>ราคา LPG:</b> ${esc(price || "มีข้อมูลราคา")}</div>` +
+    (updated ? `<div class="updated">อัปเดต/ตรวจพบ: ${esc(updated)}</div>` : "");
+}
+
 function openStation(place) {
   const isLpg = isActualLpg(place);
   const name = esc(place.displayName?.text || place.displayName || (isLpg ? "สถานี LPG" : "ปั๊มน้ำมัน"));
   const address = esc(place.formattedAddress || "ไม่มีข้อมูลที่อยู่");
   const mapsUrl = place.googleMapsURI || `https://www.google.com/maps/search/?api=1&query=${place.location.lat()},${place.location.lng()}`;
 
-  let priceHtml = "";
   let verification;
-
   if (isLpg) {
-    const lpg = getFuelPrices(place).find((fuel) => String(fuel.type || "").toUpperCase() === "LPG");
-    priceHtml = `<div class="meta"><b>ราคา LPG:</b> ไม่มีข้อมูลราคา</div>`;
-    if (lpg?.price) {
-      const price = formatPrice(lpg);
-      const updated = formatUpdateTime(lpg.updateTime);
-      priceHtml = `<div class="meta"><b>ราคา LPG:</b> ${esc(price || "มีข้อมูลราคา")}</div>` +
-        (updated ? `<div class="updated">อัปเดต/ตรวจพบ: ${esc(updated)}</div>` : "");
-    }
-
     verification = hasLpgFuelData(place)
       ? "Google Places มีข้อมูลเชื้อเพลิง LPG ของสถานีนี้"
       : "ชื่อสถานีระบุ LPG/แก๊ส แต่ Google ยังไม่มีข้อมูลเชื้อเพลิงแบบโครงสร้าง";
   } else {
-    verification = "ปั๊มน้ำมันทั่วไป (ไม่พบข้อมูลว่ามี LPG)";
+    verification = hasLpgFuelData(place)
+      ? "ปั๊มน้ำมัน (Google ระบุว่ามี LPG จำหน่ายด้วย)"
+      : "ปั๊มน้ำมันทั่วไป (ไม่พบข้อมูลว่ามี LPG)";
   }
+
+  // ปั๊ม LPG แสดงแถวราคาเสมอ (แม้ไม่มีข้อมูล) ปั๊มน้ำมันแสดงเฉพาะเมื่อมีราคา LPG
+  const priceHtml = lpgPriceHtml(place, isLpg);
 
   $("panelContent").innerHTML = `
     <div class="title">${name}</div>
