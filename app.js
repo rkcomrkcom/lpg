@@ -1,4 +1,4 @@
-const KEY = "lpgFinderApiKey";
+const API_KEY = "AIzaSyDsVXzfEamsmukzhgdBtByA2IsbDinlgXQ";
 
 let map = null;
 let Place = null;
