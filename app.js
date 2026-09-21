@@ -4,9 +4,23 @@ let map = null;
 let Place = null;
 let AdvancedMarkerElement = null;
 let markers = [];
-let searchTimer = null;
+let mapTimer = null;   // ตัวจับเวลาสำหรับค้นหาตามแมพ
+let textTimer = null;  // ตัวจับเวลาสำหรับช่องค้นหาข้อความ
 let searchSeq = 0;
 let lastSearchSignature = "";
+let authFailed = false;
+let loadedKey = null;
+
+const PLACE_FIELDS = [
+  "id",
+  "displayName",
+  "location",
+  "formattedAddress",
+  "googleMapsURI",
+  "primaryType",
+  "types",
+  "fuelOptions"
+];
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,6 +43,7 @@ function clearFatal() {
 }
 
 window.gm_authFailure = () => {
+  authFailed = true;
   showFatal("Google Maps ปฏิเสธ API Key นี้ หรือคีย์หมดโควตา Demo แล้ว");
 };
 
@@ -44,7 +59,10 @@ async function loadMaps(key) {
     script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) + "&v=weekly&libraries=places,marker";
     script.async = true;
     script.defer = true;
-    script.onload = resolve;
+    script.onload = () => {
+      loadedKey = key;
+      resolve();
+    };
     script.onerror = () => reject(new Error("โหลด Google Maps ไม่สำเร็จ กรุณาตรวจ API Key"));
     document.head.appendChild(script);
   });
@@ -62,6 +80,7 @@ async function start() {
     status("กำลังโหลด Google Maps…", 8000);
     await loadMaps(key);
     await init();
+    if (authFailed) return; // ให้หน้ากรอกคีย์และข้อความ error ค้างอยู่
     $("keyScreen").hidden = true;
     status("พร้อมใช้งาน", 1500);
   } catch (error) {
@@ -94,8 +113,8 @@ async function init() {
   });
 
   map.addListener("idle", () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(searchArea, 500);
+    clearTimeout(mapTimer);
+    mapTimer = setTimeout(searchArea, 500);
   });
 
   $("refresh").onclick = () => searchArea(true);
@@ -162,14 +181,24 @@ async function searchArea(force = false) {
   $("refresh").disabled = true;
 
   try {
-    const results = await Promise.allSettled(plan.centers.map((center) => searchCell(center)));
+    // ค้นหาปั๊มทุกชนิดรอบจุดต่าง ๆ + ค้นหาด้วยข้อความ "LPG" ทั้งพื้นที่ที่เห็น
+    // เพื่อไม่ให้ปั๊ม LPG หลุดไปเพราะติด 20 อันดับแรกของปั๊มน้ำมันทั่วไป
+    const tasks = [
+      ...plan.centers.map((center) => searchCell(center)),
+      searchViewportText(bounds)
+    ];
+    const results = await Promise.allSettled(tasks);
     if (seq !== searchSeq) return;
 
     const all = [];
     let failures = 0;
     for (const result of results) {
-      if (result.status === "fulfilled") all.push(...result.value);
-      else failures++;
+      if (result.status === "fulfilled") {
+        all.push(...result.value);
+      } else {
+        failures++;
+        console.error("Places search failed:", result.reason);
+      }
     }
 
     const unique = dedupePlaces(all).filter(isActualLpg);
@@ -178,7 +207,7 @@ async function searchArea(force = false) {
 
     if (failures === results.length) {
       $("count").textContent = "ค้นหาไม่สำเร็จ";
-      status("Google Places ไม่ตอบข้อมูล กรุณาตรวจ API Key หรือโควตา", 5000);
+      status("Google Places ไม่ตอบข้อมูล กรุณาตรวจ API Key หรือโควตา (ดู error ใน Console)", 5000);
     } else {
       $("count").textContent = `LPG ในพื้นที่นี้ ${visible.length} แห่ง`;
       if (failures) status(`ค้นหาได้บางส่วน (${failures} จุดค้นหามีปัญหา)`, 3500);
@@ -194,23 +223,29 @@ async function searchArea(force = false) {
 
 async function searchCell(center) {
   const { places } = await Place.searchNearby({
-    fields: [
-      "id",
-      "displayName",
-      "location",
-      "formattedAddress",
-      "googleMapsURI",
-      "primaryType",
-      "types",
-      "fuelOptions"
-    ],
+    fields: PLACE_FIELDS,
     locationRestriction: {
       center,
       radius: 50000
     },
     includedPrimaryTypes: ["gas_station"],
     maxResultCount: 20,
-    rankPreference: "DISTANCE"
+    rankPreference: "DISTANCE",
+    language: "th",
+    region: "TH"
+  });
+  return places || [];
+}
+
+async function searchViewportText(bounds) {
+  const { places } = await Place.searchByText({
+    textQuery: "LPG ปั๊มแก๊ส",
+    fields: PLACE_FIELDS,
+    locationRestriction: bounds,
+    includedType: "gas_station",
+    maxResultCount: 20,
+    language: "th",
+    region: "TH"
   });
   return places || [];
 }
@@ -233,11 +268,16 @@ function hasLpgFuelData(place) {
 }
 
 function hasStrongLpgName(place) {
-  const text = [
-    place.displayName?.text || place.displayName || "",
-    place.formattedAddress || ""
-  ].join(" ").toLowerCase();
-  return /\blpg\b|แก๊ส lpg|ก๊าซ lpg|ปั๊ม lpg|lpg station/.test(text);
+  const name = String(place.displayName?.text || place.displayName || "").toLowerCase();
+  const address = String(place.formattedAddress || "").toLowerCase();
+
+  // เจอคำว่า LPG / แอลพีจี ที่ชื่อหรือที่อยู่
+  if (/lpg|แอลพีจี/.test(name + " " + address)) return true;
+
+  // ชื่อเป็น "ปั๊มแก๊ส / ก๊าซ" แต่ไม่ใช่ NGV/CNG
+  if (/แก๊ส|ก๊าซ/.test(name) && !/ngv|cng|เอ็นจีวี/.test(name)) return true;
+
+  return false;
 }
 
 function isActualLpg(place) {
@@ -350,8 +390,8 @@ function setupSearch() {
 
   input.oninput = () => {
     clear.hidden = !input.value.trim();
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => searchText(input.value.trim()), 450);
+    clearTimeout(textTimer);
+    textTimer = setTimeout(() => searchText(input.value.trim()), 450);
   };
 
   clear.onclick = () => {
@@ -419,6 +459,13 @@ $("start").onclick = async () => {
   const key = $("apiKey").value.trim();
   if (!key) return status("กรุณาใส่ Maps Demo Key", 3500);
   localStorage.setItem(KEY, key);
+
+  // ถ้าเคยโหลด Google Maps ด้วยคีย์เดิม/คีย์ที่ถูกปฏิเสธไปแล้ว ต้องรีโหลดหน้าเพื่อใช้คีย์ใหม่
+  if (window.google?.maps && (authFailed || loadedKey !== key)) {
+    location.reload();
+    return;
+  }
+
   $("start").disabled = true;
   try {
     await start();
