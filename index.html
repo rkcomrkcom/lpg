@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <title>LPG Finder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="topbar">
+    <div class="search">
+      <span class="search-icon">⌕</span>
+      <input id="search" type="search" placeholder="ค้นหาจังหวัด / อำเภอ / สถานที่" autocomplete="off">
+      <button id="clear" hidden aria-label="ล้างการค้นหา">×</button>
+    </div>
+    <div id="results" class="results" hidden></div>
+  </div>
+
+  <button id="locate" class="locate" aria-label="ตำแหน่งปัจจุบัน">◎</button>
+  <div id="status" class="status" hidden></div>
+
+  <div id="panel" class="panel" hidden>
+    <button id="close" class="close" aria-label="ปิด">×</button>
+    <div id="panelContent"></div>
+  </div>
+
+  <div class="bottom">
+    <span id="count">กำลังค้นหา LPG…</span>
+    <button id="refresh">ค้นหาพื้นที่นี้</button>
+  </div>
+
+  <div id="keyScreen" class="key-screen">
+    <div class="key-card">
+      <h2>LPG Finder</h2>
+      <p>ใส่ <b>Google Maps Platform Demo Key</b> เพื่อเริ่มใช้งาน</p>
+      <input id="apiKey" type="password" placeholder="วาง Maps Demo Key ตรงนี้" autocomplete="off">
+      <button id="start">เริ่มใช้งาน</button>
+      <div id="keyError" class="key-error" hidden></div>
+      <small>คีย์จะเก็บไว้เฉพาะในเบราว์เซอร์เครื่องนี้</small>
+      <button id="resetKey" class="reset-key">เปลี่ยน API Key</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
