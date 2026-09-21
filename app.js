@@ -51,22 +51,23 @@ async function loadMaps(key) {
 }
 
 async function start() {
-  clearFatal();
-  const key = localStorage.getItem(KEY);
-  if (!key) {
-    $("keyScreen").hidden = false;
-    return;
-  }
-
   try {
     status("กำลังโหลด Google Maps…", 8000);
-    await loadMaps(key);
+
+    await loadMaps(API_KEY);
     await init();
+
     $("keyScreen").hidden = true;
+
     status("พร้อมใช้งาน", 1500);
+
   } catch (error) {
     console.error(error);
-    showFatal(error?.message || "เปิด Google Maps ไม่สำเร็จ");
+
+    showFatal(
+      error?.message ||
+      "เปิด Google Maps ไม่สำเร็จ"
+    );
   }
 }
 
